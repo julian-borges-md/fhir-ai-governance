@@ -217,19 +217,19 @@ fhir-ai-governance/
     ├── test_audit_logging.py
     └── test_fhir_examples.py
 
-```
-Citation
+## Citation
 
-If you use this repository, please cite the software and the associated preprint when available.
-A CITATION.cff file is included for GitHub citation support.
+If you use this repository, please cite the software and the associated preprint when available.  
+A `CITATION.cff` file is included to support GitHub native citation workflows.
 
-License
+## License
 
-MIT License. See LICENSE.
+MIT License. See `LICENSE`.
 
-Contact author
+## Contact author
 
-Julian Borges, MD, MSc
-MS Health Informatics, Computer Science Department
-Boston University, Metropolitan College
+Julian Borges, MD, MSc  
+MS Health Informatics, Computer Science Department  
+Boston University, Metropolitan College  
 Email: jyborges@bu.edu
+
