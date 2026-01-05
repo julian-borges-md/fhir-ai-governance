@@ -216,3 +216,20 @@ fhir-ai-governance/
     ├── test_governance_policy.py
     ├── test_audit_logging.py
     └── test_fhir_examples.py
+
+```
+Citation
+
+If you use this repository, please cite the software and the associated preprint when available.
+A CITATION.cff file is included for GitHub citation support.
+
+License
+
+MIT License. See LICENSE.
+
+Contact author
+
+Julian Borges, MD, MSc
+MS Health Informatics, Computer Science Department
+Boston University, Metropolitan College
+Email: jyborges@bu.edu
