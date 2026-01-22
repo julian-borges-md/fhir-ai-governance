@@ -1,0 +1,38 @@
+suppressPackageStartupMessages({
+  library(fs)
+  library(readr)
+  library(dplyr)
+})
+
+log <- readr::read_csv(fs::path("outputs", "decision_log.csv"), show_col_types = FALSE)
+
+figure3 <- log %>%
+  arrange(policy_id, t) %>%
+  group_by(policy_id) %>%
+  mutate(cum_cost = cumsum(cost)) %>%
+  ungroup() %>%
+  select(t, policy_id, cum_cost)
+
+table2 <- log %>%
+  group_by(policy_id) %>%
+  summarise(
+    horizon = max(t),
+    total_cost = sum(cost),
+    mean_cost = mean(cost),
+    .groups = "drop"
+  ) %>%
+  arrange(total_cost)
+
+readr::write_csv(figure3, fs::path("outputs", "figure3_safety_error.csv"))
+readr::write_csv(table2, fs::path("outputs", "table_primary_outcomes.csv"))
+
+cfg <- yaml::read_yaml(fs::path("config", "step0_simulation_config.yaml"))
+table1 <- tibble(
+  run_id = cfg$run_id,
+  seed = cfg$seed,
+  horizon = cfg$horizon,
+  policies = paste(vapply(cfg$policies, `[[`, character(1), "id"), collapse = "; "),
+  arms = paste(vapply(cfg$models$portfolio, `[[`, character(1), "id"), collapse = "; ")
+)
+readr::write_csv(table1, fs::path("outputs", "table_governance_configuration.csv"))
+
