@@ -117,7 +117,7 @@ latent_event_prob <- function(x) {
   sbp <- ifelse(is.na(x$systolic_bp), 120, x$systolic_bp)
   a1c <- ifelse(is.na(x$a1c), 5.6, x$a1c)
   cr  <- ifelse(is.na(x$creatinine), 1.0, x$creatinine)
-  z <- -7.0 +
+  z <- -5.5 +
     0.035 * x$age_years +
     1.00 * x$has_diabetes +
     1.10 * x$has_ckd +
