@@ -1,30 +1,44 @@
 suppressPackageStartupMessages({
   library(fs)
-  library(glue)
 })
 
-project_root <- fs::path_abs(fs::path("."))
-r_dir <- fs::path(project_root, "analysis", "R")
+stopifnot(fs::file_exists("config/step0_simulation_config.yaml"))
 
-step_scripts <- c(
-  "step0_write_environment.R",
-  "step1_build_context.R",
-  "step2_simulate_deployment.R",
-  "step3_compute_safety_metrics.R",
-  "step4_compute_regret.R",
-  "step5_generate_audit_artifacts.R",
-  "step6_validate_audit_reconstructability.R",
-  "step7_generate_manifest.R",
-  "step8_plot_figures.R"
-)
+# Step 0
+source("analysis/R/step0_write_environment.R")
 
-for (s in step_scripts) {
-  script_path <- fs::path(r_dir, s)
-  if (!fs::file_exists(script_path)) {
-    stop(glue("Missing script: {script_path}"))
-  }
-  message(glue("\nRunning {s}"))
-  source(script_path, local = new.env(parent = globalenv()))
-}
+# Step 1
+source("analysis/R/step1_build_context.R")
 
-message("\nPipeline complete")
+# Step 2
+source("analysis/R/step2_simulate_deployment.R")
+
+# Step 3
+source("analysis/R/step3_compute_safety_metrics.R")
+
+# Step 4
+source("analysis/R/step4_compute_regret.R")
+
+# Step 5
+source("analysis/R/step5_generate_audit_artifacts.R")
+
+# Step 6
+source("analysis/R/step6_validate_audit_reconstructability.R")
+
+# Step 7
+source("analysis/R/step7_generate_manifest.R")
+
+# Step 8
+source("analysis/R/step8_plot_figures.R")
+
+cat("\nPipeline complete.\n")
+cat("Key outputs:\n")
+cat("- outputs/context_table.csv\n")
+cat("- outputs/decision_log.csv\n")
+cat("- outputs/table_primary_outcomes.csv\n")
+cat("- outputs/table_regret_summary.csv\n")
+cat("- outputs/table_audit_metrics.csv\n")
+cat("- outputs/manifest.json\n")
+cat("- figures/figure3_safety_error.(pdf|png)\n")
+cat("- figures/figure4_regret.(pdf|png)\n")
+cat("- figures/figure5_audit_example.(pdf|png)\n\n")
