@@ -4,192 +4,284 @@ suppressPackageStartupMessages({
   library(readr)
   library(dplyr)
   library(purrr)
-  library(digest)
+  library(stringr)
+  library(tidyr)
 })
 
-cfg <- yaml::read_yaml(fs::path("config", "step0_simulation_config.yaml"))
+# -----------------------------
+# Config and inputs
+# -----------------------------
+
+config_path <- fs::path("config", "step0_simulation_config.yaml")
+cfg <- yaml::read_yaml(config_path)
 set.seed(cfg$seed)
 
-context <- readr::read_csv(fs::path("outputs", "context_table.csv"), show_col_types = FALSE)
+in_context <- fs::path("outputs", "context_table.csv")
+out_log <- fs::path("outputs", "decision_log.csv")
 
-horizon <- min(cfg$horizon, nrow(context))
-context <- context %>% slice(seq_len(horizon))
+stopifnot(fs::file_exists(in_context))
 
-deterministic_id <- function(prefix, fields, run_id) {
-  key <- paste0(prefix, "|", run_id, "|", paste(fields, collapse = "|"))
-  paste0(prefix, "_", digest::digest(key, algo = "sha256"))
-}
-
-define_portfolio <- function(cfg) {
-  list(
-    arm_a_rules = function(x) {
-      score <- 0
-      score <- score + 0.7 * (x$has_diabetes == 1)
-      score <- score + 0.6 * (x$has_ckd == 1)
-      score <- score + 0.4 * (!is.na(x$a1c) && x$a1c >= 7.0)
-      score <- score + 0.3 * (!is.na(x$systolic_bp) && x$systolic_bp >= 140)
-      pmin(1, pmax(0, score / 2.0))
-    },
-    arm_b_linear = function(x) {
-      z <- 0
-      z <- z + 0.03 * (x$age_years %||% 50)
-      z <- z + 1.1 * x$has_diabetes
-      z <- z + 1.0 * x$has_ckd
-      z <- z + 0.05 * (x$systolic_bp %||% 120)
-      z <- z + 0.4 * ((x$a1c %||% 6.0) - 6.0)
-      1 / (1 + exp(- (z - 6)))
-    },
-    arm_c_calibrated = function(x) {
-      p <- (0.5 * (x$has_diabetes + x$has_ckd)) + 0.01 * (x$age_years %||% 50)
-      p <- pmin(0.95, pmax(0.05, p / 2))
-      p
-    }
+ctx <- readr::read_csv(in_context, show_col_types = FALSE) %>%
+  mutate(
+    patient_id = as.character(patient_id),
+    age_years = as.numeric(age_years),
+    sex = as.character(sex),
+    encounter_type = as.character(encounter_type),
+    has_diabetes = as.integer(has_diabetes),
+    has_ckd = as.integer(has_ckd),
+    on_insulin = as.integer(on_insulin),
+    systolic_bp = as.numeric(systolic_bp),
+    a1c = as.numeric(a1c),
+    creatinine = as.numeric(creatinine)
   )
+
+if (nrow(ctx) == 0) stop("Context table is empty.")
+
+horizon <- min(as.integer(cfg$horizon), nrow(ctx))
+
+# -----------------------------
+# Helpers: strict parameter handling
+# -----------------------------
+
+require_scalar_numeric <- function(x, name, policy_id) {
+  if (is.null(x) || length(x) != 1) {
+    stop(paste0("Missing required parameter ", name, " for policy_id=", policy_id))
+  }
+  xn <- suppressWarnings(as.numeric(x))
+  if (is.na(xn)) {
+    stop(paste0("Invalid numeric parameter ", name, " for policy_id=", policy_id, " value=", as.character(x)))
+  }
+  xn
 }
 
-`%||%` <- function(a, b) if (is.null(a) || is.na(a)) b else a
-
-portfolio <- define_portfolio(cfg)
-
-thresholds <- purrr::map_dbl(cfg$models$portfolio, ~ .x$threshold)
-names(thresholds) <- purrr::map_chr(cfg$models$portfolio, ~ .x$id)
-
-simulate_truth <- function(x) {
-  latent <- 0.02 * (x$age_years %||% 50) +
-    1.2 * x$has_diabetes +
-    1.0 * x$has_ckd +
-    0.03 * (x$systolic_bp %||% 120) +
-    0.5 * ((x$a1c %||% 6.0) - 6.0)
-  p <- 1 / (1 + exp(- (latent - 8)))
-  rbinom(1, 1, p)
+require_scalar_character <- function(x, name, policy_id) {
+  if (is.null(x) || length(x) != 1 || !nzchar(as.character(x))) {
+    stop(paste0("Missing required parameter ", name, " for policy_id=", policy_id))
+  }
+  as.character(x)
 }
 
-predict_arm <- function(arm_id, x) {
-  fn <- portfolio[[arm_id]]
-  p <- fn(x)
-  yhat <- as.integer(p >= thresholds[[arm_id]])
-  list(prob = p, pred = yhat)
+# -----------------------------
+# Frozen model portfolio
+# -----------------------------
+
+clamp01 <- function(x) pmin(pmax(x, 0), 1)
+sigmoid <- function(z) 1 / (1 + exp(-z))
+
+arm_score <- list(
+  arm_a_rules = function(x) {
+    s <- 0
+    s <- s + 0.25 * (x$age_years >= 65)
+    s <- s + 0.35 * (x$has_diabetes == 1)
+    s <- s + 0.25 * (x$has_ckd == 1)
+    s <- s + 0.25 * (!is.na(x$systolic_bp) && x$systolic_bp >= 140)
+    clamp01(s)
+  },
+  arm_b_linear = function(x) {
+    sbp <- ifelse(is.na(x$systolic_bp), 120, x$systolic_bp)
+    a1c <- ifelse(is.na(x$a1c), 5.6, x$a1c)
+    cr  <- ifelse(is.na(x$creatinine), 1.0, x$creatinine)
+    z <- -6.0 +
+      0.04 * x$age_years +
+      0.90 * x$has_diabetes +
+      0.80 * x$has_ckd +
+      0.015 * (sbp - 120) +
+      0.35 * (a1c - 5.6) +
+      0.25 * (cr - 1.0) +
+      0.30 * x$on_insulin
+    clamp01(sigmoid(z))
+  },
+  arm_c_calibrated = function(x) {
+    p1 <- arm_score$arm_a_rules(x)
+    p2 <- arm_score$arm_b_linear(x)
+    p <- 0.55 * p2 + 0.45 * p1
+    if (!is.na(x$age_years) && x$age_years < 18) p <- p * 0.4
+    clamp01(p)
+  }
+)
+
+portfolio <- cfg$models$portfolio
+arm_ids <- purrr::map_chr(portfolio, "id")
+arm_thresholds <- purrr::set_names(
+  purrr::map_dbl(portfolio, ~ as.numeric(.x$threshold)),
+  arm_ids
+)
+
+stopifnot(all(arm_ids %in% names(arm_score)))
+
+# -----------------------------
+# Outcome generator (synthetic ground truth)
+# -----------------------------
+
+latent_event_prob <- function(x) {
+  sbp <- ifelse(is.na(x$systolic_bp), 120, x$systolic_bp)
+  a1c <- ifelse(is.na(x$a1c), 5.6, x$a1c)
+  cr  <- ifelse(is.na(x$creatinine), 1.0, x$creatinine)
+  z <- -7.0 +
+    0.035 * x$age_years +
+    1.00 * x$has_diabetes +
+    1.10 * x$has_ckd +
+    0.02 * (sbp - 120) +
+    0.30 * (a1c - 5.6) +
+    0.35 * (cr - 1.0) +
+    0.25 * x$on_insulin
+  clamp01(sigmoid(z))
 }
 
-compute_cost <- function(pred, truth, w) {
-  if (pred == 1 && truth == 1) return(w$true_positive)
-  if (pred == 0 && truth == 0) return(w$true_negative)
-  if (pred == 1 && truth == 0) return(w$false_positive)
-  if (pred == 0 && truth == 1) return(w$false_negative)
+draw_outcome <- function(p) as.integer(stats::runif(1) < p)
+
+# -----------------------------
+# Safety weighted cost
+# -----------------------------
+
+w <- cfg$cost$weights
+cost_from_confusion <- function(y_true, y_pred) {
+  if (y_true == 1 && y_pred == 0) return(as.numeric(w$false_negative))
+  if (y_true == 0 && y_pred == 1) return(as.numeric(w$false_positive))
+  if (y_true == 1 && y_pred == 1) return(as.numeric(w$true_positive))
+  if (y_true == 0 && y_pred == 0) return(as.numeric(w$true_negative))
   NA_real_
 }
 
-init_policy_state <- function() list(counts = list(), mean_cost = list())
+# -----------------------------
+# Governance policies
+# -----------------------------
 
-select_arm_static <- function(arm_id, state, t) {
-  list(arm_id = arm_id, state = state)
+init_policy_state <- function(policy_id) {
+  tibble(
+    policy_id = policy_id,
+    arm_id = arm_ids,
+    n = 0L,
+    total_cost = 0.0
+  )
 }
 
-select_arm_epsilon_greedy <- function(state, epsilon, arms) {
-  counts <- state$counts
-  mean_cost <- state$mean_cost
-  for (a in arms) {
-    if (is.null(counts[[a]])) { counts[[a]] <- 0; mean_cost[[a]] <- 0 }
-  }
-  explore <- runif(1) < epsilon || any(purrr::map_int(counts, identity) == 0)
-  if (explore) {
-    pick <- sample(arms, 1)
+select_arm_static <- function(cfg_policy) {
+  require_scalar_character(cfg_policy$arm_id, "arm_id", cfg_policy$id)
+}
+
+select_arm_epsilon_greedy <- function(state, epsilon) {
+  if (stats::runif(1) < epsilon) {
+    sample(state$arm_id, 1)
   } else {
-    pick <- arms[[which.min(purrr::map_dbl(arms, ~ mean_cost[[.x]]))]]
+    state %>%
+      mutate(mean_cost = if_else(n > 0, total_cost / n, Inf)) %>%
+      arrange(mean_cost, arm_id) %>%
+      slice(1) %>%
+      pull(arm_id)
   }
-  state$counts <- counts
-  state$mean_cost <- mean_cost
-  list(arm_id = pick, state = state)
 }
 
-select_arm_ucb1 <- function(state, arms, t, c) {
-  counts <- state$counts
-  mean_cost <- state$mean_cost
-  for (a in arms) {
-    if (is.null(counts[[a]])) { counts[[a]] <- 0; mean_cost[[a]] <- 0 }
-  }
-  if (any(purrr::map_int(counts, identity) == 0)) {
-    pick <- arms[[which(purrr::map_int(arms, ~ counts[[.x]]) == 0)[1]]]
+select_arm_ucb1 <- function(state, t, exploration_c) {
+  s <- state %>%
+    mutate(
+      mean_cost = if_else(n > 0, total_cost / n, Inf),
+      bonus = if_else(n > 0, exploration_c * sqrt(log(max(t, 2)) / n), Inf),
+      lcb = mean_cost - bonus
+    )
+  
+  if (any(s$n == 0L)) {
+    s %>% filter(n == 0L) %>% arrange(arm_id) %>% slice(1) %>% pull(arm_id)
   } else {
-    ucb <- purrr::map_dbl(arms, function(a) {
-      mean_cost[[a]] - c * sqrt(log(t) / counts[[a]])
-    })
-    pick <- arms[[which.min(ucb)]]
+    s %>% arrange(lcb, arm_id) %>% slice(1) %>% pull(arm_id)
   }
-  state$counts <- counts
-  state$mean_cost <- mean_cost
-  list(arm_id = pick, state = state)
 }
 
-update_policy_state <- function(state, arm_id, cost) {
-  if (is.null(state$counts[[arm_id]])) {
-    state$counts[[arm_id]] <- 0
-    state$mean_cost[[arm_id]] <- 0
-  }
-  n <- state$counts[[arm_id]] + 1
-  mu <- state$mean_cost[[arm_id]]
-  mu_new <- mu + (cost - mu) / n
-  state$counts[[arm_id]] <- n
-  state$mean_cost[[arm_id]] <- mu_new
-  state
+update_policy_state <- function(state, chosen_arm, observed_cost) {
+  state %>%
+    mutate(
+      n = if_else(arm_id == chosen_arm, n + 1L, n),
+      total_cost = if_else(arm_id == chosen_arm, total_cost + observed_cost, total_cost)
+    )
 }
 
-arms <- purrr::map_chr(cfg$models$portfolio, ~ .x$id)
-weights <- cfg$cost$weights
+# -----------------------------
+# Oracle (for regret)
+# -----------------------------
 
-policies <- cfg$policies
+oracle_min_cost <- function(x, y_true) {
+  costs <- purrr::map_dbl(arm_ids, function(a) {
+    p_hat <- arm_score[[a]](x)
+    y_pred <- as.integer(p_hat >= arm_thresholds[[a]])
+    cost_from_confusion(y_true, y_pred)
+  })
+  min(costs, na.rm = TRUE)
+}
 
-policy_states <- purrr::set_names(
-  purrr::map(policies, ~ init_policy_state()),
-  purrr::map_chr(policies, ~ .x$id)
+# -----------------------------
+# Simulation loop
+# -----------------------------
+
+policies_cfg <- cfg$policies
+if (is.null(policies_cfg) || length(policies_cfg) == 0) stop("No policies defined in config.")
+
+policy_ids <- purrr::map_chr(policies_cfg, "id")
+
+states <- purrr::set_names(
+  purrr::map(policy_ids, init_policy_state),
+  policy_ids
 )
 
-decision_log <- vector("list", length = horizon * length(policies))
+rows <- vector("list", length = length(policy_ids) * horizon)
 k <- 1L
 
 for (t in seq_len(horizon)) {
-  x <- context[t, ]
-  truth <- simulate_truth(x)
+  x <- ctx[t, ]
   
-  for (p in policies) {
-    pid <- p$id
-    st <- policy_states[[pid]]
+  p_true <- latent_event_prob(x)
+  y_true <- draw_outcome(p_true)
+  
+  for (p in policies_cfg) {
+    pid <- require_scalar_character(p$id, "id", "unknown")
+    ptype <- require_scalar_character(p$type, "type", pid)
+    st <- states[[pid]]
     
-    sel <- switch(
-      p$type,
-      static = select_arm_static(p$arm_id, st, t),
-      epsilon_greedy = select_arm_epsilon_greedy(st, p$epsilon, arms),
-      ucb1 = select_arm_ucb1(st, arms, t, p$exploration_c),
-      stop("Unknown policy type")
-    )
+    chosen_arm <- NULL
+    if (ptype == "static") {
+      chosen_arm <- select_arm_static(p)
+      
+    } else if (ptype == "epsilon_greedy") {
+      eps <- require_scalar_numeric(p$epsilon, "epsilon", pid)
+      chosen_arm <- select_arm_epsilon_greedy(st, eps)
+      
+    } else if (ptype == "ucb1") {
+      cval <- require_scalar_numeric(p$exploration_c, "exploration_c", pid)
+      chosen_arm <- select_arm_ucb1(st, t, cval)
+      
+    } else {
+      stop(paste0("Unknown policy type: ", ptype, " for policy_id=", pid))
+    }
     
-    arm_id <- sel$arm_id
-    st <- sel$state
+    p_hat <- arm_score[[chosen_arm]](x)
+    y_pred <- as.integer(p_hat >= arm_thresholds[[chosen_arm]])
     
-    pred <- predict_arm(arm_id, x)
-    cost <- compute_cost(pred$pred, truth, weights)
+    cost <- cost_from_confusion(y_true, y_pred)
+    oracle_cost <- oracle_min_cost(x, y_true)
+    regret <- cost - oracle_cost
     
-    st <- update_policy_state(st, arm_id, cost)
-    policy_states[[pid]] <- st
+    states[[pid]] <- update_policy_state(st, chosen_arm, cost)
     
-    decision_id <- deterministic_id("decision", c(cfg$run_id, pid, t, x$patient_id), cfg$run_id)
-    
-    decision_log[[k]] <- tibble(
+    rows[[k]] <- tibble(
       run_id = cfg$run_id,
-      t = t,
+      seed = as.integer(cfg$seed),
+      t = as.integer(t),
       policy_id = pid,
-      arm_id = arm_id,
+      policy_type = ptype,
       patient_id = x$patient_id,
-      truth = truth,
-      pred = pred$pred,
-      pred_prob = pred$prob,
-      cost = cost,
-      decision_id = decision_id
+      arm_id = chosen_arm,
+      p_hat = as.numeric(p_hat),
+      threshold = as.numeric(arm_thresholds[[chosen_arm]]),
+      y_pred = as.integer(y_pred),
+      y_true = as.integer(y_true),
+      p_true = as.numeric(p_true),
+      cost = as.numeric(cost),
+      oracle_cost = as.numeric(oracle_cost),
+      regret = as.numeric(regret)
     )
     k <- k + 1L
   }
 }
 
-decision_log <- bind_rows(decision_log)
+decision_log <- dplyr::bind_rows(rows)
 
-readr::write_csv(decision_log, fs::path("outputs", "decision_log.csv"))
+readr::write_csv(decision_log, out_log)
