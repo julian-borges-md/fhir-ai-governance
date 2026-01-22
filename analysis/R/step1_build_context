@@ -1,0 +1,262 @@
+suppressPackageStartupMessages({
+  library(fs)
+  library(yaml)
+  library(jsonlite)
+  library(dplyr)
+  library(tidyr)
+  library(purrr)
+  library(stringr)
+  library(readr)
+  library(lubridate)
+  library(digest)
+})
+
+# -----------------------------
+# Step 1: Build context table
+# -----------------------------
+
+config_path <- fs::path("config", "step0_simulation_config.yaml")
+cfg <- yaml::read_yaml(config_path)
+set.seed(cfg$seed)
+
+data_dir <- fs::path("data", "public", "synthea")
+out_dir <- fs::path("outputs")
+out_context <- fs::path(out_dir, "context_table.csv")
+out_dict <- fs::path(out_dir, "context_dictionary.csv")
+
+stopifnot(fs::dir_exists(data_dir))
+fs::dir_create(out_dir)
+
+# Deterministic reference date for age calculation
+# Prefer config value; otherwise fall back to audit origin date; otherwise fixed default.
+ref_date <- {
+  rd <- NULL
+  if (!is.null(cfg$context) && !is.null(cfg$context$reference_date)) rd <- cfg$context$reference_date
+  if (is.null(rd) && !is.null(cfg$audit) && !is.null(cfg$audit$deterministic_recorded_origin_utc)) {
+    rd <- substr(cfg$audit$deterministic_recorded_origin_utc, 1, 10)
+  }
+  if (is.null(rd)) rd <- "2026-01-22"
+  lubridate::ymd(rd)
+}
+
+safe_get <- function(x, default = NA) {
+  if (is.null(x)) default else x
+}
+
+list_fhir_files <- function(dir) {
+  all <- fs::dir_ls(dir, recurse = TRUE, type = "file")
+  all <- all[stringr::str_detect(tolower(all), "\\.(json|ndjson)$")]
+  
+  # Exclude common non-patient exports or metadata locations
+  all <- all[!stringr::str_detect(tolower(all), "/metadata/")]
+  
+  all
+}
+
+read_fhir_bundle <- function(path) {
+  ext <- tolower(fs::path_ext(path))
+  if (ext == "ndjson") {
+    lines <- readr::read_lines(path)
+    # Each line should be a JSON object; keep list structure
+    purrr::map(lines, ~ jsonlite::fromJSON(.x, simplifyVector = FALSE))
+  } else {
+    jsonlite::fromJSON(path, simplifyVector = FALSE)
+  }
+}
+
+is_bundle <- function(x) {
+  is.list(x) && !is.null(x$resourceType) && identical(x$resourceType, "Bundle")
+}
+
+extract_bundle_entries <- function(bundle) {
+  if (!is.null(bundle$entry)) bundle$entry else list()
+}
+
+resource_type <- function(entry) {
+  rt <- NULL
+  if (is.list(entry) && !is.null(entry$resource) && is.list(entry$resource)) {
+    rt <- entry$resource$resourceType
+  }
+  safe_get(rt, NA_character_)
+}
+
+extract_resources <- function(entries, type) {
+  res <- purrr::keep(entries, ~ identical(resource_type(.x), type))
+  purrr::map(res, ~ .x$resource)
+}
+
+get_patient_age_years <- function(patient) {
+  birth <- safe_get(patient$birthDate, NA_character_)
+  if (is.na(birth) || !nzchar(birth)) return(NA_real_)
+  b <- suppressWarnings(lubridate::ymd(birth))
+  if (is.na(b)) return(NA_real_)
+  as.numeric(floor(lubridate::time_length(lubridate::interval(b, ref_date), "years")))
+}
+
+get_patient_sex <- function(patient) {
+  safe_get(patient$gender, NA_character_)
+}
+
+has_condition_code_prefix <- function(conditions, code_prefix) {
+  any(purrr::map_lgl(conditions, function(cd) {
+    codes <- safe_get(cd$code$coding, NULL)
+    if (is.null(codes)) return(FALSE)
+    any(purrr::map_lgl(codes, function(cx) {
+      code <- safe_get(cx$code, "")
+      is.character(code) && stringr::str_starts(code, code_prefix)
+    }))
+  }))
+}
+
+# Extract numeric observation values from either:
+# - Observation.code matches loinc (direct valueQuantity)
+# - Observation.code is a panel and component.code matches loinc (component valueQuantity)
+numeric_observation_any <- function(observations, loinc_codes) {
+  loinc_codes <- as.character(loinc_codes)
+  
+  extract_one <- function(obs) {
+    codes <- safe_get(obs$code$coding, NULL)
+    
+    # Direct Observation.code match
+    if (!is.null(codes)) {
+      has <- any(purrr::map_lgl(codes, function(cx) safe_get(cx$code, "") %in% loinc_codes))
+      if (has) {
+        v <- safe_get(obs$valueQuantity$value, NA_real_)
+        return(suppressWarnings(as.numeric(v)))
+      }
+    }
+    
+    # Component match (for panels like BP)
+    comps <- safe_get(obs$component, NULL)
+    if (!is.null(comps)) {
+      vals <- purrr::map_dbl(comps, function(comp) {
+        cc <- safe_get(comp$code$coding, NULL)
+        if (is.null(cc)) return(NA_real_)
+        hasc <- any(purrr::map_lgl(cc, function(cx) safe_get(cx$code, "") %in% loinc_codes))
+        if (!hasc) return(NA_real_)
+        v <- safe_get(comp$valueQuantity$value, NA_real_)
+        suppressWarnings(as.numeric(v))
+      })
+      vals <- vals[!is.na(vals)]
+      if (length(vals) > 0) return(vals[[length(vals)]])
+    }
+    
+    NA_real_
+  }
+  
+  vals <- purrr::map_dbl(observations, extract_one)
+  vals <- vals[!is.na(vals)]
+  if (length(vals) == 0) NA_real_ else vals[[length(vals)]]
+}
+
+has_medication_keyword <- function(meds, keyword) {
+  kw <- stringr::str_to_lower(keyword)
+  any(purrr::map_lgl(meds, function(mr) {
+    txt <- safe_get(mr$medicationCodeableConcept$text, "")
+    stringr::str_detect(stringr::str_to_lower(txt), kw)
+  }))
+}
+
+encounter_type_simple <- function(encounters) {
+  if (length(encounters) == 0) return(NA_character_)
+  cls <- safe_get(encounters[[length(encounters)]]$class$code, NA_character_)
+  safe_get(cls, NA_character_)
+}
+
+build_context_for_bundle <- function(bundle) {
+  # Guard: only handle Bundle
+  if (!is_bundle(bundle)) return(NULL)
+  
+  entries <- extract_bundle_entries(bundle)
+  
+  patients <- extract_resources(entries, "Patient")
+  if (length(patients) == 0) return(NULL)
+  
+  encounters <- extract_resources(entries, "Encounter")
+  conditions <- extract_resources(entries, "Condition")
+  observations <- extract_resources(entries, "Observation")
+  meds <- extract_resources(entries, "MedicationRequest")
+  procedures <- extract_resources(entries, "Procedure") # reserved for future context features
+  
+  patient <- patients[[1]]
+  patient_id <- safe_get(patient$id, digest::digest(patient, algo = "sha256"))
+  
+  # Accept dashed and undashed LOINC forms
+  systolic_codes <- c("8480-6", "84806")
+  a1c_codes <- c("4548-4", "45484")
+  creat_codes <- c("2160-0", "21600")
+  
+  tibble(
+    patient_id = as.character(patient_id),
+    age_years = get_patient_age_years(patient),
+    sex = get_patient_sex(patient),
+    has_diabetes = as.integer(has_condition_code_prefix(conditions, "E11")),
+    has_ckd = as.integer(has_condition_code_prefix(conditions, "N18")),
+    systolic_bp = numeric_observation_any(observations, systolic_codes),
+    a1c = numeric_observation_any(observations, a1c_codes),
+    creatinine = numeric_observation_any(observations, creat_codes),
+    on_insulin = as.integer(has_medication_keyword(meds, "insulin")),
+    encounter_type = encounter_type_simple(encounters)
+  )
+}
+
+# ---- main execution ----
+
+files <- list_fhir_files(data_dir)
+if (length(files) == 0) stop("No FHIR files found in data/public/synthea")
+
+# Read files; flatten into a list of bundles
+bundle_list <- purrr::map(files, function(f) {
+  obj <- read_fhir_bundle(f)
+  
+  # If it is a single Bundle
+  if (is_bundle(obj)) return(list(obj))
+  
+  # If it is NDJSON of Bundles
+  if (is.list(obj) && length(obj) > 0 && is.null(obj$resourceType)) {
+    # Keep only Bundles; drop non-bundles safely
+    return(purrr::keep(obj, is_bundle))
+  }
+  
+  # Non-bundle JSON (e.g., metadata); ignore
+  list()
+})
+
+bundle_list <- purrr::flatten(bundle_list)
+
+contexts <- purrr::map_dfr(bundle_list, build_context_for_bundle)
+
+contexts <- contexts %>%
+  distinct(patient_id, .keep_all = TRUE) %>%
+  mutate(
+    sex = if_else(is.na(sex) | !nzchar(sex), "unknown", sex),
+    # Force numeric types for stable CSV schema
+    age_years = as.numeric(age_years),
+    systolic_bp = as.numeric(systolic_bp),
+    a1c = as.numeric(a1c),
+    creatinine = as.numeric(creatinine),
+    has_diabetes = as.integer(has_diabetes),
+    has_ckd = as.integer(has_ckd),
+    on_insulin = as.integer(on_insulin),
+    encounter_type = as.character(encounter_type)
+  )
+
+readr::write_csv(contexts, out_context)
+
+dictionary <- tibble(
+  variable = names(contexts),
+  description = c(
+    "Deterministic patient identifier derived from FHIR Patient.id (or SHA256 fallback)",
+    paste0("Age in years computed from Patient.birthDate relative to reference_date=", as.character(ref_date)),
+    "Administrative sex from Patient.gender",
+    "Binary flag derived from Condition ICD prefix E11 (Type 2 diabetes mellitus)",
+    "Binary flag derived from Condition ICD prefix N18 (Chronic kidney disease)",
+    "Most recent systolic blood pressure extracted from Observation (LOINC 8480-6) or BP panel component",
+    "Most recent hemoglobin A1c extracted from Observation (LOINC 4548-4)",
+    "Most recent serum creatinine extracted from Observation (LOINC 2160-0)",
+    "Binary flag derived from MedicationRequest medicationCodeableConcept.text contains keyword insulin",
+    "Simplified encounter class code from most recent Encounter.class.code"
+  )
+)
+
+readr::write_csv(dictionary, out_dict)
