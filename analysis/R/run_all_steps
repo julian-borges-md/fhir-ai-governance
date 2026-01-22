@@ -1,0 +1,30 @@
+suppressPackageStartupMessages({
+  library(fs)
+  library(glue)
+})
+
+project_root <- fs::path_abs(fs::path("."))
+r_dir <- fs::path(project_root, "analysis", "R")
+
+step_scripts <- c(
+  "step0_write_environment.R",
+  "step1_build_context.R",
+  "step2_simulate_deployment.R",
+  "step3_compute_safety_metrics.R",
+  "step4_compute_regret.R",
+  "step5_generate_audit_artifacts.R",
+  "step6_validate_audit_reconstructability.R",
+  "step7_generate_manifest.R",
+  "step8_plot_figures.R"
+)
+
+for (s in step_scripts) {
+  script_path <- fs::path(r_dir, s)
+  if (!fs::file_exists(script_path)) {
+    stop(glue("Missing script: {script_path}"))
+  }
+  message(glue("\nRunning {s}"))
+  source(script_path, local = new.env(parent = globalenv()))
+}
+
+message("\nPipeline complete")
