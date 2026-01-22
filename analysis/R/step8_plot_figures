@@ -1,0 +1,51 @@
+suppressPackageStartupMessages({
+  library(fs)
+  library(readr)
+  library(dplyr)
+  library(ggplot2)
+})
+
+fs::dir_create(fs::path("figures"))
+
+f3 <- readr::read_csv(fs::path("outputs", "figure3_safety_error.csv"), show_col_types = FALSE)
+p3 <- ggplot(f3, aes(x = t, y = cum_cost, group = policy_id, linetype = policy_id)) +
+  geom_line() +
+  labs(x = "Decision time", y = "Cumulative safety weighted cost", linetype = "Policy") +
+  theme_bw()
+
+ggsave(fs::path("figures", "figure3_cumulative_safety.pdf"), p3, width = 7, height = 4)
+ggsave(fs::path("figures", "figure3_cumulative_safety.png"), p3, width = 7, height = 4, dpi = 300)
+
+f4 <- readr::read_csv(fs::path("outputs", "figure4_regret.csv"), show_col_types = FALSE)
+p4 <- ggplot(f4, aes(x = t, y = cum_regret, group = policy_id, linetype = policy_id)) +
+  geom_line() +
+  labs(x = "Decision time", y = "Cumulative regret versus oracle", linetype = "Policy") +
+  theme_bw()
+
+ggsave(fs::path("figures", "figure4_cumulative_regret.pdf"), p4, width = 7, height = 4)
+ggsave(fs::path("figures", "figure4_cumulative_regret.png"), p4, width = 7, height = 4, dpi = 300)
+
+audit_ex <- jsonlite::fromJSON(fs::path("outputs", "figure5_audit_example.json"), simplifyVector = FALSE)
+
+annotate_lines <- function() {
+  c(
+    "Figure 5 example artifact",
+    paste0("AuditEvent id: ", audit_ex$audit_event$id),
+    paste0("Provenance id: ", audit_ex$provenance$id),
+    paste0("Decision id: ", audit_ex$audit_event$extension[[1]]$valueString),
+    paste0("Policy: ", audit_ex$audit_event$extension[[2]]$valueString),
+    paste0("Cost: ", audit_ex$audit_event$extension[[3]]$valueDecimal)
+  )
+}
+
+txt <- annotate_lines()
+df <- data.frame(x = 1, y = seq_along(txt), label = txt)
+
+p5 <- ggplot(df, aes(x = x, y = y, label = label)) +
+  geom_text(hjust = 0) +
+  xlim(1, 2) +
+  labs(x = NULL, y = NULL) +
+  theme_void()
+
+ggsave(fs::path("figures", "figure5_audit_example.pdf"), p5, width = 7, height = 4)
+ggsave(fs::path("figures", "figure5_audit_example.png"), p5, width = 7, height = 4, dpi = 300)
