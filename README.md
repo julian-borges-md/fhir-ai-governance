@@ -1,10 +1,11 @@
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![FHIR](https://img.shields.io/badge/standard-FHIR%20R4-success.svg)](https://www.hl7.org/fhir/)
 [![Governance](https://img.shields.io/badge/focus-AI%20Governance-purple.svg)](#)
-[![Reproducibility](https://img.shields.io/badge/reproducibility-deterministic%20pipeline-green.svg)](#reproducibility)
+[![Reproducibility](https://img.shields.io/badge/reproducibility-fixed--seed%20simulation-green.svg)](#reproducibility)
+[![Release](https://img.shields.io/badge/release-v1.0--manuscript-blueviolet.svg)](#release)
 [![Status](https://img.shields.io/badge/status-research-lightgrey.svg)](#)
 
-# FHIR-Native AI Governance for Clinical Decision Support  
+# Adaptive FHIR-Native AI Governance for Clinical Decision Support  
 ## A modular, auditable deployment framework for real-world clinical AI
 
 This repository implements a **FHIR-native governance layer** for clinical decision support systems.  
@@ -19,6 +20,17 @@ Rather than introducing new predictive models, this project provides **deploymen
 
 The core contribution is **governance**, not prediction.
 
+> Research use only. This codebase is intended for methodological evaluation and does not constitute a clinical decision support system.
+
+---
+
+## Release
+
+This repository is maintained with manuscript-anchored releases.  
+The manuscript-associated snapshot is tagged as:
+
+- `v1.0-manuscript`
+
 ---
 
 ## Keywords
@@ -32,14 +44,7 @@ Clinical AI governance; FHIR-native infrastructure; clinical decision support; d
 Clinical AI systems rarely fail because accurate models cannot be built.  
 They fail because **deployment strategies are static, opaque, and ungoverned**.
 
-In many production environments:
-- A single model
-- A single threshold
-- A single deployment policy  
-
-are applied uniformly across heterogeneous patients, care settings, and time periods.
-
-This repository reframes deployment as a **sequential decision problem** and evaluates whether standardized FHIR context can be used to govern model selection decisions while producing **auditable, interoperable accountability artifacts**.
+In many production environments, a single model and threshold are applied uniformly across heterogeneous patients, care settings, and time periods. This repository reframes deployment as a **sequential decision problem** and evaluates whether standardized FHIR context can be used to govern model selection while producing **auditable, interoperable accountability artifacts**.
 
 ---
 
@@ -49,8 +54,8 @@ A deployment governance engine that:
 
 1. Receives patient and encounter context via HL7 FHIR resources  
 2. Selects a model from a portfolio of frozen, independently validated models  
-3. Applies explicit cost functions reflecting clinical risk and resource sensitivity  
-4. Logs each deployment decision as FHIR Provenance and AuditEvent resources  
+3. Applies explicit cost functions reflecting safety and resource sensitivity  
+4. Logs each deployment decision as FHIR Provenance and FHIR AuditEvent resources  
 5. Enables deterministic post hoc reconstruction of decision pathways  
 
 No model retraining.  
@@ -76,9 +81,8 @@ The framework is organized into **three strictly separated layers**.
 - Standardized audit and provenance artifacts are emitted automatically
 
 ### 3. Execution layer
-- Existing predictive models, clinical risk calculators, or rule-based systems  
-- Treated as interchangeable decision arms  
-- Model internals are opaque to governance logic  
+- Existing predictive models, clinical risk calculators, or rule-based systems are treated as interchangeable decision arms  
+- Model internals are opaque to governance logic
 
 Detailed specifications are provided in:
 - `docs/01_architecture.md`
@@ -89,7 +93,7 @@ Detailed specifications are provided in:
 
 ## Research questions
 
-1. Can standardized FHIR resources provide sufficient contextual signal for adaptive AI deployment governance without bespoke feature engineering  
+1. Can standardized FHIR resources provide sufficient contextual signal for adaptive deployment governance without bespoke feature engineering  
 2. Does adaptive model selection reduce safety-relevant error compared with static deployment strategies  
 3. Can audit and provenance artifacts be generated automatically using native FHIR resources  
 4. Can safety and cost tradeoffs be governed without retraining predictive models  
@@ -115,7 +119,8 @@ See:
 
 ## Sequential computation framework
 
-All analyses follow a **numbered, deterministic execution pipeline**.
+All analyses follow a **numbered, fixed-seed execution pipeline**.  
+This structure ensures that **every figure and table is traceable to a specific step**.
 
 | Step | Description |
 |-----:|------------|
@@ -127,9 +132,7 @@ All analyses follow a **numbered, deterministic execution pipeline**.
 | Step 5 | Generate FHIR AuditEvent and Provenance artifacts |
 | Step 6 | Validate audit completeness and reconstructability |
 | Step 7 | Generate execution manifest and metadata |
-| Step 8 | Produce publication-ready figures |
-
-This structure ensures that **every figure and table is traceable to a specific step**.
+| Step 8 | Produce publication-ready figures and tables |
 
 See `docs/07_reproducibility.md` for full details.
 
@@ -137,61 +140,45 @@ See `docs/07_reproducibility.md` for full details.
 
 ## Repository contents
 
-- `docs/`  
-  Manuscript-aligned documentation, governance rationale, policy alignment  
-
-- `fhir/ig/`  
-  FHIR profiles, value sets, example resources  
-
-- `governance/`  
-  Policy definitions, cost models, audit logging templates  
-
-- `analysis/`  
-  Fully scripted Python and R pipelines following the numbered steps  
-
-- `simulations/`  
-  Configuration-driven experiments and outputs  
-
-- `figures/`  
-  Manuscript-ready diagrams and plots  
-
-- `tests/`  
-  Unit tests for governance logic, audit completeness, and FHIR validity  
+- `docs/` Manuscript-aligned documentation, governance rationale, policy alignment  
+- `fhir/ig/` FHIR profiles, value sets, and example resources  
+- `governance/` Policy definitions, cost models, model registry interfaces, audit logging templates  
+- `analysis/` Scripted pipelines implementing Steps 0–8  
+- `simulations/` Configuration-driven experiments and outputs  
+- `figures/` Manuscript-ready diagrams and plots  
+- `tests/` Unit tests for governance logic, audit completeness, and FHIR validity  
 
 ---
 
 ## Quickstart
 
-### Path A: Public demonstration (synthetic FHIR)
+### Path A: Public demonstration using synthetic FHIR data
+1. Place Synthea FHIR bundles in `data/public/synthea/`  
+2. Run context construction (Step 1)  
+3. Execute governance simulation (Step 2)  
+4. Compute metrics and generate figures and tables (Steps 3–8)  
 
-1. Place Synthea FHIR bundles in `data/public/synthea/`
-2. Run context construction (Step 1)
-3. Execute governance simulation (Step 2)
-4. Compute metrics and generate figures (Steps 3–8)
-
-### Path B: Research validation (restricted data)
-
-1. Obtain authorized access to clinical data (eg MIMIC-IV)
-2. Map required tables to FHIR locally
-3. Execute the identical governance pipeline
-4. Report aggregate results only
+### Path B: Optional local validation using restricted data
+1. Obtain authorized access to MIMIC-IV through PhysioNet  
+2. Map required tables to FHIR resources locally  
+3. Execute the identical governance pipeline  
+4. Report aggregate results only  
 
 Detailed instructions:
 - `docs/00_overview.md`
-- `analysis/python/00_setup.py`
 
 ---
 
 ## Evaluation plan
 
 ### Governance performance outcomes
-- Cumulative safety-weighted error
-- Policy regret relative to oracle selector
-- Stability of model selection across contexts
+- Cumulative safety-weighted error  
+- Policy regret relative to an oracle selector  
+- Stability of model selection across contexts  
 
 ### Accountability outcomes
-- Audit completeness
-- Deterministic reconstructability from FHIR artifacts
+- Audit completeness  
+- Deterministic reconstructability from FHIR artifacts  
 
 See `docs/05_evaluation_plan.md`.
 
@@ -199,15 +186,14 @@ See `docs/05_evaluation_plan.md`.
 
 ## Reproducibility
 
-This repository is designed for **meaningful reuse and extension**.
+This repository is designed for meaningful reuse and extension.
 
-- Fully scripted, deterministic pipelines  
+- Fixed-seed, deterministic simulation runs  
 - Explicit separation of shareable and restricted data  
-- Configuration-driven simulations  
+- Configuration-driven experiments  
 - Manifest-based provenance for all outputs  
 
-All reported results can be regenerated from source using the numbered steps.
-
+All reported results can be regenerated from source using the numbered steps.  
 See `docs/07_reproducibility.md`.
 
 ---
@@ -232,12 +218,11 @@ fhir-ai-governance/
 ├── simulations/
 ├── figures/
 └── tests/
-
 ---
 
 ## Repository details
 
-(See the full directory tree in the repository for implementation details.)
+See the full directory tree in the repository for implementation details.
 
 ---
 
