@@ -1,0 +1,34 @@
+suppressPackageStartupMessages({
+  library(fs)
+  library(readr)
+  library(dplyr)
+})
+
+log <- readr::read_csv(fs::path("outputs", "decision_log.csv"), show_col_types = FALSE)
+
+oracle <- log %>%
+  group_by(t, patient_id) %>%
+  summarise(oracle_cost = min(cost), .groups = "drop")
+
+log2 <- log %>%
+  left_join(oracle, by = c("t", "patient_id")) %>%
+  mutate(regret = cost - oracle_cost)
+
+figure4 <- log2 %>%
+  arrange(policy_id, t) %>%
+  group_by(policy_id) %>%
+  mutate(cum_regret = cumsum(regret)) %>%
+  ungroup() %>%
+  select(t, policy_id, cum_regret)
+
+table_regret <- log2 %>%
+  group_by(policy_id) %>%
+  summarise(
+    total_regret = sum(regret),
+    mean_regret = mean(regret),
+    .groups = "drop"
+  ) %>%
+  arrange(total_regret)
+
+readr::write_csv(figure4, fs::path("outputs", "figure4_regret.csv"))
+readr::write_csv(table_regret, fs::path("outputs", "table_regret_summary.csv"))
