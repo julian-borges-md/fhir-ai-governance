@@ -232,3 +232,33 @@ fhir-ai-governance/
 ├── simulations/
 ├── figures/
 └── tests/
+
+---
+
+## Repository details
+
+(See the full directory tree in the repository for implementation details.)
+
+---
+
+## Citation
+
+If you use this repository in academic, clinical, or policy-facing work, please cite the software and the associated manuscript or preprint when available.
+
+A `CITATION.cff` file is included to support GitHub-native citation workflows and standardized software citation.
+
+---
+
+## License
+
+This project is released under the MIT License.  
+See the `LICENSE` file for full terms.
+
+---
+
+## Contact
+
+**Julian Borges, MD, MSc**  
+MS Health Informatics, Computer Science  
+Boston University Metropolitan College  
+Email: jyborges@bu.edu
