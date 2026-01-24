@@ -1,0 +1,9 @@
+cff-version: 1.1.0
+message: "If you use this software, please cite it as below."
+authors:
+- family-names: Borges
+  given-names: Julian
+orcid: https://orcid.org/0000-0000-0000-0000
+title:julian-borges-md/fhir-ai-governance: v1.0 – Manuscript Release: Adaptive FHIR-Native AI Governance for Clinical Decision Support
+version: V1.1-manuscript
+date-released: 2026-01-23
