@@ -4,6 +4,8 @@
 [![Reproducibility](https://img.shields.io/badge/reproducibility-fixed--seed%20simulation-green.svg)](#reproducibility)
 [![Release](https://img.shields.io/badge/release-v1.0--manuscript-blueviolet.svg)](#release)
 [![Status](https://img.shields.io/badge/status-research-lightgrey.svg)](#)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18356747.svg)](https://doi.org/10.5281/zenodo.18356747)
+
 
 # Adaptive FHIR-Native AI Governance for Clinical Decision Support  
 ## A modular, auditable deployment framework for real-world clinical AI
