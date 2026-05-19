@@ -1,0 +1,21 @@
+suppressPackageStartupMessages({
+  library(yaml)
+  library(fs)
+  library(readr)
+})
+
+config_path <- fs::path("config", "step0_simulation_config.yaml")
+outputs_dir <- fs::path("outputs")
+fs::dir_create(outputs_dir)
+
+cfg <- yaml::read_yaml(config_path)
+
+set.seed(cfg$seed)
+
+env_path <- fs::path(outputs_dir, "environment.txt")
+lines <- capture.output({
+  cat("Run ID:", cfg$run_id, "\n")
+  cat("Seed:", cfg$seed, "\n\n")
+  sessionInfo()
+})
+readr::write_lines(lines, env_path)

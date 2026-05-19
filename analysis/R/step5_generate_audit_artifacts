@@ -1,0 +1,103 @@
+suppressPackageStartupMessages({
+  library(fs)
+  library(yaml)
+  library(readr)
+  library(dplyr)
+  library(jsonlite)
+  library(digest)
+})
+
+cfg <- yaml::read_yaml(fs::path("config", "step0_simulation_config.yaml"))
+log <- readr::read_csv(fs::path("outputs", "decision_log.csv"), show_col_types = FALSE)
+ctx <- readr::read_csv(fs::path("outputs", "context_table.csv"), show_col_types = FALSE)
+
+deterministic_id <- function(prefix, fields, run_id) {
+  key <- paste0(prefix, "|", run_id, "|", paste(fields, collapse = "|"))
+  paste0(prefix, "_", digest::digest(key, algo = "sha256"))
+}
+
+make_audit_event <- function(row, cfg) {
+  event_id <- deterministic_id("auditevent", c(row$decision_id), cfg$run_id)
+  list(
+    resourceType = "AuditEvent",
+    id = event_id,
+    type = list(
+      system = "http://terminology.hl7.org/CodeSystem/audit-event-type",
+      code = "rest"
+    ),
+    recorded = as.character(Sys.time()),
+    outcome = "0",
+    agent = list(list(
+      who = list(display = cfg$audit$agent_name),
+      requestor = TRUE
+    )),
+    source = list(observer = list(identifier = list(value = cfg$audit$system_uri))),
+    entity = list(
+      list(
+        what = list(reference = paste0("Patient/", row$patient_id)),
+        type = list(code = "2", display = "System Object")
+      ),
+      list(
+        what = list(identifier = list(value = row$arm_id)),
+        role = list(code = "4", display = "Domain Resource")
+      )
+    ),
+    extension = list(
+      list(
+        url = "urn:bu:governance:decision",
+        valueString = row$decision_id
+      ),
+      list(
+        url = "urn:bu:governance:policy",
+        valueString = row$policy_id
+      ),
+      list(
+        url = "urn:bu:governance:cost",
+        valueDecimal = row$cost
+      )
+    )
+  )
+}
+
+make_provenance <- function(row, cfg) {
+  prov_id <- deterministic_id("provenance", c(row$decision_id), cfg$run_id)
+  list(
+    resourceType = "Provenance",
+    id = prov_id,
+    recorded = as.character(Sys.time()),
+    target = list(list(reference = paste0("AuditEvent/", deterministic_id("auditevent", c(row$decision_id), cfg$run_id)))),
+    agent = list(list(
+      who = list(display = cfg$audit$agent_name),
+      type = list(text = "Software")
+    )),
+    activity = list(
+      system = "http://terminology.hl7.org/CodeSystem/v3-DataOperation",
+      code = "CREATE"
+    ),
+    entity = list(list(
+      role = "source",
+      what = list(identifier = list(value = row$arm_id))
+    )),
+    extension = list(
+      list(url = "urn:bu:governance:run_id", valueString = row$run_id),
+      list(url = "urn:bu:governance:policy_id", valueString = row$policy_id)
+    )
+  )
+}
+
+write_ndjson <- function(records, path) {
+  lines <- vapply(records, jsonlite::toJSON, FUN.VALUE = character(1), auto_unbox = TRUE, null = "null")
+  readr::write_lines(lines, path)
+}
+
+audits <- lapply(seq_len(nrow(log)), function(i) make_audit_event(log[i, ], cfg))
+provs <- lapply(seq_len(nrow(log)), function(i) make_provenance(log[i, ], cfg))
+
+write_ndjson(audits, fs::path("outputs", "audit_events.ndjson"))
+write_ndjson(provs, fs::path("outputs", "provenance.ndjson"))
+
+example <- list(
+  audit_event = audits[[1]],
+  provenance = provs[[1]]
+)
+jsonlite::write_json(example, fs::path("outputs", "figure5_audit_example.json"), auto_unbox = TRUE, pretty = TRUE, null = "null")

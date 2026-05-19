@@ -1,0 +1,44 @@
+suppressPackageStartupMessages({
+  library(fs)
+})
+
+stopifnot(fs::file_exists("config/step0_simulation_config.yaml"))
+
+# Step 0
+source("analysis/R/step0_write_environment.R")
+
+# Step 1
+source("analysis/R/step1_build_context.R")
+
+# Step 2
+source("analysis/R/step2_simulate_deployment.R")
+
+# Step 3
+source("analysis/R/step3_compute_safety_metrics.R")
+
+# Step 4
+source("analysis/R/step4_compute_regret.R")
+
+# Step 5
+source("analysis/R/step5_generate_audit_artifacts.R")
+
+# Step 6
+source("analysis/R/step6_validate_audit_reconstructability.R")
+
+# Step 7
+source("analysis/R/step7_generate_manifest.R")
+
+# Step 8
+source("analysis/R/step8_plot_figures.R")
+
+cat("\nPipeline complete.\n")
+cat("Key outputs:\n")
+cat("- outputs/context_table.csv\n")
+cat("- outputs/decision_log.csv\n")
+cat("- outputs/table_primary_outcomes.csv\n")
+cat("- outputs/table_regret_summary.csv\n")
+cat("- outputs/table_audit_metrics.csv\n")
+cat("- outputs/manifest.json\n")
+cat("- figures/figure3_safety_error.(pdf|png)\n")
+cat("- figures/figure4_regret.(pdf|png)\n")
+cat("- figures/figure5_audit_example.(pdf|png)\n\n")

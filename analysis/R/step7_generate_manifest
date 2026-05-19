@@ -1,0 +1,41 @@
+suppressPackageStartupMessages({
+  library(fs)
+  library(yaml)
+  library(jsonlite)
+  library(digest)
+  library(readr)
+})
+
+cfg <- yaml::read_yaml(fs::path("config", "step0_simulation_config.yaml"))
+
+hash_file <- function(path) {
+  digest::digest(file = path, algo = "sha256")
+}
+
+collect_files <- function(dir) {
+  if (!fs::dir_exists(dir)) return(character())
+  fs::dir_ls(dir, recurse = TRUE, type = "file")
+}
+
+outputs_files <- collect_files(fs::path("outputs"))
+fig_files <- collect_files(fs::path("figures"))
+
+all_files <- c(outputs_files, fig_files)
+all_files <- all_files[fs::file_exists(all_files)]
+
+entries <- lapply(all_files, function(p) {
+  list(
+    path = as.character(p),
+    sha256 = hash_file(p),
+    size_bytes = fs::file_info(p)$size
+  )
+})
+
+manifest <- list(
+  run_id = cfg$run_id,
+  seed = cfg$seed,
+  created_at = as.character(Sys.time()),
+  files = entries
+)
+
+jsonlite::write_json(manifest, fs::path("outputs", "manifest.json"), auto_unbox = TRUE, pretty = TRUE)
